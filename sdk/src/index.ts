@@ -1,7 +1,7 @@
 /**
- * @spore/sdk — official TypeScript client for the SPORE protocol HTTP API.
+ * spore-protocol — official TypeScript client for the SPORE protocol HTTP API.
  *
- *   import { SporeClient } from '@spore/sdk'
+ *   import { SporeClient } from 'spore-protocol'
  *
  *   const spore = new SporeClient({
  *     baseUrl: 'https://api.sporeprotocol.xyz',

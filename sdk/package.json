@@ -1,7 +1,7 @@
 {
-  "name": "@spore/sdk",
+  "name": "spore-protocol",
   "version": "0.1.0",
-  "description": "Official TypeScript SDK for the SPORE protocol HTTP API.",
+  "description": "Official TypeScript SDK for the SPORE HTTP API.",
   "license": "MIT",
   "type": "module",
   "main": "./dist/index.cjs",

@@ -1,13 +1,13 @@
-# @spore/sdk
+# spore-protocol
 
 Official TypeScript client for the [SPORE](https://sporeprotocol.xyz) protocol HTTP API.
 
 ## Install
 
 ```bash
-npm install @spore/sdk
+npm install spore-protocol
 # or
-pnpm add @spore/sdk
+pnpm add spore-protocol
 ```
 
 Node 18+ (built-in `fetch`). Browsers and Cloudflare Workers also work — pass a `fetch` impl explicitly if your runtime needs it.
@@ -17,7 +17,7 @@ Node 18+ (built-in `fetch`). Browsers and Cloudflare Workers also work — pass 
 Generate an API key from the SPORE dashboard. The plaintext key is shown **once** at creation time — store it in a secret manager (`SPORE_API_KEY` env var, etc.).
 
 ```ts
-import { SporeClient } from '@spore/sdk'
+import { SporeClient } from 'spore-protocol'
 
 const spore = new SporeClient({
   baseUrl: 'https://api.sporeprotocol.xyz',

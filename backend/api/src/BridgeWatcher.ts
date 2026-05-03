@@ -28,6 +28,7 @@ const STATE_DIR = process.env.BRIDGE_STATE_DIR || '/data'
 const STATE_FILE = 'bridge-watcher.json'
 const POLL_INTERVAL_MS = 12_000 // Base block time ~2s; 12s = 6 blocks behind, fine for UX
 const REORG_OVERLAP_BLOCKS = 5
+const MAX_SCAN_CHUNK = 2_000 // Public RPCs (Base Sepolia) often cap at 2k-5k blocks
 
 type WatchSource = {
   label: string
@@ -277,19 +278,36 @@ export class BridgeWatcher {
       const head = await client.baseProvider.getBlockNumber()
 
       for (const src of this.sources) {
-        const cursor = this.lastProcessedBlockByContract[src.address] ?? src.fallbackStartBlock
-        const fromBlock = Math.max(0, cursor - REORG_OVERLAP_BLOCKS)
-        const toBlock = head
-        if (fromBlock > toBlock) continue
+        let cursor = this.lastProcessedBlockByContract[src.address] ?? src.fallbackStartBlock
+        
+        while (cursor < head) {
+          const fromBlock = Math.max(0, cursor - REORG_OVERLAP_BLOCKS)
+          const toBlock = Math.min(head, fromBlock + MAX_SCAN_CHUNK)
+          
+          if (fromBlock >= toBlock) {
+            cursor = head
+            break
+          }
 
-        const filter = src.contract.filters.Deposited()
-        const events = await src.contract.queryFilter(filter, fromBlock, toBlock)
-        for (const event of events) {
-          await this.processEvent(src.label, src.address, event as ethers.EventLog)
+          console.log(`[BridgeWatcher] ${src.label}: scanning ${fromBlock}..${toBlock} (head ${head})`)
+          const filter = src.contract.filters.Deposited()
+          const events = await src.contract.queryFilter(filter, fromBlock, toBlock)
+          
+          for (const event of events) {
+            await this.processEvent(src.label, src.address, event as ethers.EventLog)
+          }
+
+          cursor = toBlock
+          this.lastProcessedBlockByContract[src.address] = toBlock
+          this.persistState()
+
+          // If we have a massive gap (e.g. server was down for days), don't
+          // block the event loop — yield briefly between chunks.
+          if (toBlock < head) {
+            await new Promise(r => setTimeout(r, 100))
+          }
         }
-        this.lastProcessedBlockByContract[src.address] = toBlock
       }
-      this.persistState()
     } finally {
       this.inFlight = false
     }
@@ -377,7 +395,21 @@ export class BridgeWatcher {
       const parsed = JSON.parse(raw) as PersistedState
 
       this.lastProcessedBlockByContract = parsed.lastProcessedBlockByContract || {}
-      this.processedKeys = new Set(parsed.processedKeys || [])
+      
+      // Normalize processedKeys: legacy keys were `address:txHash:logIndex`.
+      // We now dedupe on txHash alone for simplicity.
+      const rawKeys = parsed.processedKeys || []
+      this.processedKeys = new Set(
+        rawKeys.map(k => {
+          if (k.includes(':')) {
+            const parts = k.split(':')
+            // If it's address:txHash:logIndex, the middle part is the txHash.
+            // If it's just address:txHash (older legacy), it's the second part.
+            return (parts[1] || parts[0]).toLowerCase()
+          }
+          return k.toLowerCase()
+        })
+      )
 
       // Migrate legacy single-cursor field. The pre-CCTP watcher had a
       // single `lastProcessedBlock` that always referred to the gateway —

@@ -140,6 +140,15 @@ services:
           - docker-proxy
 
   frontend:
+    # Tagged image so Dokploy actually rebuilds — same rationale as the
+    # api service tag. Without a versioned tag, compose reuses the
+    # existing `swarm-frontend:latest` even when the Dockerfile or its
+    # ARGs changed, and freshly-set NEXT_PUBLIC_* env values never reach
+    # the bundle (NEXT_PUBLIC_* is bake-time, not runtime). Symptom: set
+    # NEXT_PUBLIC_BASE_SEPOLIA_RPC_URL to an Alchemy URL, redeploy, but
+    # the browser still hits publicnode.com — frontend was never rebuilt.
+    image: swarm-frontend:cb-2026-05-03-4
+    pull_policy: build
     build:
       context: .
       dockerfile: frontend/Dockerfile
@@ -155,6 +164,11 @@ services:
       # required: docker only invalidates the cache when ARG VALUES change
       # in the Dockerfile, not when --build-arg or compose args change.
       args:
+        # Bumping CACHE_BUST in the args (and the matching image tag
+        # above) is what actually forces a fresh `next build` — Docker
+        # cache only invalidates a layer when its ARG value changes, so
+        # toggling .env / Dokploy env alone isn't enough.
+        CACHE_BUST: 2026-05-03-4
         NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:3001}
         NEXT_PUBLIC_WS_URL: ${NEXT_PUBLIC_WS_URL:-ws://localhost:3001/ws}
         NEXT_PUBLIC_NETWORK_ID: ${NEXT_PUBLIC_NETWORK_ID:-16600}

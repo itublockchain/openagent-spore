@@ -279,3 +279,52 @@ export const getTreasuryClient = getChainClient
 export function _resetChainClient(): void {
   cached = null
 }
+
+/**
+ * Wrap any operator-signed tx call with retry-on-stale-nonce.
+ *
+ * NonceManager keeps a local counter relative to the chain `pending`
+ * value cached at first send. Any tx signed with the same operator key
+ * OUTSIDE this NonceManager (a different process, an agent container
+ * that reuses PRIVATE_KEY, an out-of-band manual tx) silently advances
+ * the chain and our cache goes stale. Subsequent sends miss `pending`
+ * and revert with NONCE_EXPIRED ("nonce too low") or
+ * REPLACEMENT_UNDERPRICED. Calling `reset()` drops the cache so the
+ * next send re-fetches `pending` and aligns with reality.
+ *
+ * Three attempts is generous: first retry handles typical one-step
+ * drift; second covers a burst of external txs racing with us.
+ * Exponential backoff (250ms, 500ms) gives mempool a moment to settle.
+ *
+ * Use this for ANY operator-signed tx call (`writeTreasury.X(...)`,
+ * `writeEscrow.X(...)`, raw `ogWallet.sendTransaction(...)`). Detects
+ * "nonce has already been used" wrapped inside a TX revert reason too,
+ * not just the typed `code` field — some adapters (Treasury contract
+ * reverts via require()) lose the structured code on the way back.
+ */
+export async function sendWithNonceRetry<T>(
+  label: string,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const MAX_ATTEMPTS = 3
+  let lastErr: unknown = null
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    try {
+      return await fn()
+    } catch (err) {
+      lastErr = err
+      const code = (err as any)?.code
+      const reason = (err as any)?.shortMessage ?? (err as any)?.reason ?? (err as any)?.message ?? ''
+      const isStaleNonce =
+        code === 'NONCE_EXPIRED' ||
+        code === 'REPLACEMENT_UNDERPRICED' ||
+        /nonce has already been used|nonce too low|replacement (transaction )?underpriced/i.test(reason)
+      if (!isStaleNonce || attempt === MAX_ATTEMPTS) break
+      console.warn(`[chain] ${label} attempt ${attempt} hit stale-nonce (${code || 'reason-match'}); resetting NonceManager and retrying`)
+      try { getChainClient().ogWallet?.reset() } catch { /* no-op */ }
+      try { getChainClient().baseWallet?.reset() } catch { /* no-op */ }
+      await new Promise(r => setTimeout(r, 250 * attempt))
+    }
+  }
+  throw lastErr
+}

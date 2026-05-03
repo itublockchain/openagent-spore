@@ -9,7 +9,7 @@ import { TaskSchema, AgentPrepareSchema, AgentDeploySchema, AgentIdParamsSchema,
 import { ethers } from 'ethers';
 import DAGRegistryABI from '../../../contracts/artifacts/src/DAGRegistry.sol/DAGRegistry.json';
 import deployments from '../../../contracts/deployments/og_testnet.json';
-import { getChainClient, USDC_DECIMALS } from './v1/chain';
+import { getChainClient, USDC_DECIMALS, sendWithNonceRetry } from './v1/chain';
 import { EventType } from '../../../shared/types';
 import { generateNonce, SiweMessage } from 'siwe'
 import jwt from 'jsonwebtoken'
@@ -493,9 +493,18 @@ export default async function createServer(deps: ServerDeps) {
     }
 
     // Operator signs spendOnBehalfOf → Treasury debits user, Escrow records task.
+    // Wrap in sendWithNonceRetry: the operator NonceManager can drift out
+    // of sync with chain when external txs share the same key (e.g. an
+    // agent container reusing PRIVATE_KEY) — without retry the user sees
+    // a hard "nonce has already been used" 400 even though their submit
+    // is fine. The helper does up-to-3 retries with NonceManager.reset()
+    // between attempts so the next send re-fetches the chain `pending`
+    // value and aligns.
     let treasuryTxHash: string;
     try {
-      const tx = await writeTreasury.spendOnBehalfOf(user.address, taskIdBytes32, budgetWei);
+      const tx = await sendWithNonceRetry('treasury.spendOnBehalfOf', () =>
+        writeTreasury.spendOnBehalfOf(user.address, taskIdBytes32, budgetWei),
+      );
       const receipt = await tx.wait();
       treasuryTxHash = receipt?.hash ?? tx.hash;
     } catch (err: any) {

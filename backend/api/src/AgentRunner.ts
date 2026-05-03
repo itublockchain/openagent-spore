@@ -6,7 +6,7 @@ import SwarmTreasuryABI from '../../../contracts/artifacts/src/SwarmTreasury.sol
 import AgentRegistryABI from '../../../contracts/artifacts/src/AgentRegistry.sol/AgentRegistry.json'
 import deployments from '../../../contracts/deployments/og_testnet.json'
 import { AgentSecretStore, AgentSecret } from './AgentSecretStore'
-import { getChainClient } from './v1/chain'
+import { getChainClient, sendWithNonceRetry } from './v1/chain'
 
 // USDC fixed at 6 decimals system-wide (matches Circle's testnet USDC).
 const USDC_DECIMALS = 6
@@ -143,43 +143,15 @@ export class AgentManager {
   }
 
   /**
-   * Wraps any operator-signed sendTransaction call with retry-on-stale-
-   * nonce. NonceManager keeps a local counter relative to the chain
-   * `pending` value it cached at first send. Any tx signed with the
-   * same operator key OUTSIDE this NonceManager (a different process,
-   * an agent container that reuses PRIVATE_KEY, an out-of-band manual
-   * tx) silently advances the chain and our cache goes stale —
-   * subsequent sends miss the actual `pending` and fail with
-   * NONCE_EXPIRED ("nonce too low") or REPLACEMENT_UNDERPRICED. Calling
-   * `reset()` drops the cache so the next send re-fetches `pending`
-   * and aligns with reality.
-   *
-   * Three attempts is generous: the first retry handles the typical
-   * one-step drift; the second covers a burst of external txs racing
-   * with us. Exponential backoff (250ms, 500ms) gives mempool a moment
-   * to settle between tries.
-   *
-   * Use this for ANY tx submitted via the operator NonceManager. The
-   * factory in v1/chain.ts shares one NonceManager across all callers
-   * so `reset()` here is also seen by SporeiseRunner / BridgeWatcher.
+   * Thin wrapper around the shared chain.ts helper so AgentRunner call
+   * sites read consistently. The helper detects NONCE_EXPIRED /
+   * REPLACEMENT_UNDERPRICED (both via error.code and reason-string
+   * substring), resets the shared operator NonceManager, and retries
+   * up to 3 times with backoff. See sendWithNonceRetry in v1/chain.ts
+   * for full rationale.
    */
   private async sendOperatorTx<T>(label: string, fn: () => Promise<T>): Promise<T> {
-    const MAX_ATTEMPTS = 3
-    let lastErr: unknown = null
-    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-      try {
-        return await fn()
-      } catch (err) {
-        lastErr = err
-        const code = (err as any)?.code
-        const isStaleNonce = code === 'NONCE_EXPIRED' || code === 'REPLACEMENT_UNDERPRICED'
-        if (!isStaleNonce || attempt === MAX_ATTEMPTS) break
-        console.warn(`[AgentManager] ${label} attempt ${attempt} hit ${code}; resetting NonceManager and retrying`)
-        try { this.fundingSigner?.reset() } catch { /* no-op */ }
-        await new Promise(r => setTimeout(r, 250 * attempt))
-      }
-    }
-    throw lastErr
+    return sendWithNonceRetry(`AgentManager.${label}`, fn)
   }
 
   /**

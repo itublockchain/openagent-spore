@@ -767,9 +767,26 @@ export class SwarmAgent {
 
       let prevOutput: unknown = null
       let prevText: string = ''
+      let prevFetchFailed = false
       if (node.prevHash) {
-        prevOutput = await this.deps.storage.fetch(node.prevHash)
-        prevText = extractFinal(prevOutput)
+        // Fail-soft: if the indexer can't surface the prev upload after
+        // all retries (typical when 0G testnet propagation lags beyond
+        // our retry budget, or the producer's upload genuinely dropped),
+        // proceed with empty prev context instead of killing the whole
+        // DAG. Output quality on this node degrades — the LLM gets less
+        // grounding — but the task completes. Without this fallback the
+        // worker just throws and the explorer sees a stuck DAG that
+        // only forceComplete (after KEEPER_TIMEOUT) can rescue.
+        try {
+          prevOutput = await this.deps.storage.fetch(node.prevHash)
+          prevText = extractFinal(prevOutput)
+        } catch (fetchErr) {
+          prevFetchFailed = true
+          console.warn(
+            `[Agent ${agentId}] prev fetch FAILED for ${node.prevHash} after retries — proceeding with empty context. Error:`,
+            (fetchErr as Error)?.message ?? fetchErr,
+          )
+        }
 
         // Find the prev node so we can decide whether to re-judge or trust
         // an existing peer validation.
@@ -781,8 +798,12 @@ export class SwarmAgent {
         // already validated this output — the SUBTASK_PEER_VALIDATED /
         // SUBTASK_VALIDATED listeners set this flag. Saves ~5-10s per
         // node in healthy multi-agent runs. We still judge cold outputs.
+        // Also skip judge when we couldn't fetch — judging an empty
+        // string is meaningless and would always reject, triggering an
+        // unwanted challenge against a node whose output we just
+        // happen to not be able to read.
         const alreadyValidated = !!prevNode?.peerValidated
-        if (!alreadyValidated) {
+        if (!alreadyValidated && !prevFetchFailed) {
           const isValid = await this.deps.compute.judge(prevText)
           if (!isValid) {
             console.log(`[Agent ${agentId}] LLM-Judge rejected output. Challenging previous node.`)
@@ -803,6 +824,8 @@ export class SwarmAgent {
               validatorAgentId: agentId,
             })).catch(() => { })
           }
+        } else if (prevFetchFailed) {
+          console.log(`[Agent ${agentId}] skipping judge for ${prevNode?.id ?? '?'} — prev output unfetchable (fail-soft)`)
         } else {
           console.log(`[Agent ${agentId}] skipping judge for ${prevNode!.id} — already peer-validated`)
         }
@@ -872,10 +895,29 @@ export class SwarmAgent {
       // Submit output hash on-chain (independent of upload completion)
       await this.deps.chain.submitOutput(node.id, outputHash)
 
-      // Track background upload — log only, don't block the hot path.
-      uploadPromise?.catch(err =>
-        console.error(`[Agent ${agentId}] async upload failed for ${outputHash}:`, err),
-      )
+      // Wait for the storage upload to land BEFORE emitting SUBTASK_DONE.
+      // Earlier "fire-and-forget" design assumed the next worker's fetch
+      // retry would absorb the propagation lag — in practice the 0G
+      // testnet indexer can take 60–120s to surface a fresh upload via
+      // `getFileLocations`, longer than the downstream worker's retry
+      // budget. The downstream then gives up with "file not found" and
+      // the whole DAG dies. Awaiting here adds the upload tail to *this*
+      // worker's wall time but guarantees readers see the file. Wrapped
+      // in a tolerant timeout so a stuck indexer doesn't block forever —
+      // if the upload genuinely failed, our async catch below logs it
+      // and the keeper watchdog eventually forceCompletes.
+      if (uploadPromise) {
+        try {
+          await uploadPromise
+        } catch (uploadErr) {
+          // Upload genuinely failed (timeout / RPC). On-chain hash is
+          // already submitted — the next worker will hit "file not
+          // found" and fall back to its empty-context degraded path
+          // (see executeSubtask prevHash branch). Log loudly so ops
+          // can see whether this is a one-off or a real outage.
+          console.error(`[Agent ${agentId}] upload await failed for ${outputHash}; downstream will run without prev context:`, uploadErr)
+        }
+      }
 
       console.log(
         `[Agent ${agentId}] subtask done (${node.id}) iters=${loopResult.iterations} tools=[${loopResult.toolsUsed.join(',')}] reason=${loopResult.stopReason}`,

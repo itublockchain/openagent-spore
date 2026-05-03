@@ -5,7 +5,14 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 import * as os from 'node:os'
 
-const MAX_RETRIES = 5
+// Fetch retry budget — sized for 0G testnet indexer propagation lag
+// (upload tx mines fast, but `getFileLocations` doesn't see the file
+// until the indexer reindexes — observed up to ~90s on the public
+// testnet under load). 8 attempts × linear 3s backoff = 108s total
+// max wait, matches the keeper-timeout budget (90s + grace) so a
+// downstream worker either succeeds or surfaces a failure within the
+// same window the planner-keeper would react.
+const MAX_RETRIES = 8
 const RETRY_BASE_MS = 3000
 // 0G SDK's `waitForLogEntry` has an unbounded `while (true)` loop that
 // polls the storage node forever when sync is stalled. Without a wall-

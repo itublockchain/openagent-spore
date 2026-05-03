@@ -70,7 +70,14 @@ interface BaseDeployments {
 export interface ChainClient {
   // 0G testnet — swarm contracts
   ogProvider: ethers.JsonRpcProvider
-  ogWallet: ethers.Wallet | null
+  /** NonceManager-wrapped operator signer for 0G chain. Concurrent
+   *  sendTransaction calls from anywhere in the API (AgentRunner gas
+   *  prefund, SporeiseRunner Treasury debits, BridgeWatcher credit
+   *  mirror, SlashWatcher batch) all share this single instance so
+   *  nonce assignments are sequential — without that, two consumers
+   *  race on `getTransactionCount(addr,'pending')` and one tx loses
+   *  with REPLACEMENT_UNDERPRICED or NONCE_EXPIRED. */
+  ogWallet: ethers.NonceManager | null
   treasuryAddr: string
   escrowAddr: string
   readTreasury: ethers.Contract
@@ -91,7 +98,11 @@ export interface ChainClient {
 
   // Base Sepolia — payment gateway + CCTP receiver
   baseProvider: ethers.JsonRpcProvider
-  baseWallet: ethers.Wallet | null
+  /** Same NonceManager rationale as ogWallet — Base-side operator txs
+   *  (CCTP receiveMessage relays, USDCGateway releases) live on a
+   *  separate nonce track from 0G but still need serialization within
+   *  the Base chain. */
+  baseWallet: ethers.NonceManager | null
   gatewayAddr: string
   baseUsdcAddr: string
   readGateway: ethers.Contract
@@ -188,8 +199,12 @@ export function getChainClient(): ChainClient {
   }
 
   // ---- Signer (same PK both chains) ----
-  let ogWallet: ethers.Wallet | null = null
-  let baseWallet: ethers.Wallet | null = null
+  // NonceManager wraps both wallets so every operator-signed tx in the
+  // API funnels through a single nonce counter per chain. Address is
+  // derived from a one-shot Wallet (no provider needed) since
+  // NonceManager doesn't expose a sync `.address`.
+  let ogWallet: ethers.NonceManager | null = null
+  let baseWallet: ethers.NonceManager | null = null
   let writeTreasury: ethers.Contract | null = null
   let writeGasTreasury: ethers.Contract | null = null
   let writeEscrow: ethers.Contract | null = null
@@ -200,9 +215,9 @@ export function getChainClient(): ChainClient {
 
   const pk = process.env.PRIVATE_KEY
   if (pk) {
-    ogWallet = new ethers.Wallet(pk, ogProvider)
-    baseWallet = new ethers.Wallet(pk, baseProvider)
-    operatorAddress = ogWallet.address
+    ogWallet = new ethers.NonceManager(new ethers.Wallet(pk, ogProvider))
+    baseWallet = new ethers.NonceManager(new ethers.Wallet(pk, baseProvider))
+    operatorAddress = new ethers.Wallet(pk).address
     writeTreasury = new ethers.Contract(treasuryAddr, SwarmTreasuryABI.abi, ogWallet)
     writeGasTreasury = gasTreasuryAddr === treasuryAddr
       ? writeTreasury

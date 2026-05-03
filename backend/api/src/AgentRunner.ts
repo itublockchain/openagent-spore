@@ -6,6 +6,7 @@ import SwarmTreasuryABI from '../../../contracts/artifacts/src/SwarmTreasury.sol
 import AgentRegistryABI from '../../../contracts/artifacts/src/AgentRegistry.sol/AgentRegistry.json'
 import deployments from '../../../contracts/deployments/og_testnet.json'
 import { AgentSecretStore, AgentSecret } from './AgentSecretStore'
+import { getChainClient } from './v1/chain'
 
 // USDC fixed at 6 decimals system-wide (matches Circle's testnet USDC).
 const USDC_DECIMALS = 6
@@ -96,23 +97,20 @@ export class AgentManager {
   private secrets: AgentSecretStore
 
   private rpcUrl = process.env.OG_RPC_URL || 'https://evmrpc-testnet.0g.ai'
-  private fundingPk = process.env.PRIVATE_KEY || ''
   private escrowAddr = process.env.L2_ESCROW_ADDRESS || deployments.SwarmEscrow
   private treasuryAddr = process.env.L2_TREASURY_ADDRESS || (deployments as any).SwarmTreasury || ''
   private registryAddr = process.env.L2_AGENT_REGISTRY_ADDRESS || (deployments as any).AgentRegistry || ''
 
   private provider = new ethers.JsonRpcProvider(this.rpcUrl)
-  // NonceManager wraps the wallet so concurrent sendTransaction calls
-  // don't both snapshot the same `pending` nonce and produce a
-  // REPLACEMENT_UNDERPRICED revert. The race triggers any time two
-  // operator-signed txs overlap — gas prefund during a deploy burst, or
-  // a prefund running parallel to an Escrow.creditAgent / Treasury debit.
-  // NonceManager assigns sequential nonces locally before either tx is
-  // sent so the chain sees them in a strict order. Plain Wallet was
-  // racing on `provider.getTransactionCount(addr, 'pending')`.
-  private fundingSigner = this.fundingPk
-    ? new ethers.NonceManager(new ethers.Wallet(this.fundingPk, this.provider))
-    : null
+  // Reuse the SHARED NonceManager-wrapped operator signer from
+  // getChainClient(). Previously AgentRunner constructed its own
+  // separate signer from the same PRIVATE_KEY, which gave us TWO
+  // independent nonce counters for the same address — chain.ts's
+  // SporeiseRunner/BridgeWatcher consumers and our gas-prefund flow
+  // could both submit a tx with the same nonce, producing
+  // NONCE_EXPIRED ("nonce too low: next nonce N, tx nonce N-1").
+  // One shared NonceManager closes the gap.
+  private fundingSigner = getChainClient().ogWallet
   private escrow: ethers.Contract | null
   private treasury: ethers.Contract | null
   private registry: ethers.Contract | null

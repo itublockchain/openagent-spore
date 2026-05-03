@@ -146,7 +146,10 @@ export interface RegisterResult {
 export class SporeiseRegistrar {
   private readonly registryAddr: string
   private readonly registry: ethers.Contract | null
-  private readonly fundingSigner: ethers.Wallet | null
+  // chain.ts now hands back a NonceManager-wrapped operator signer so
+  // every consumer (here, AgentRunner, BridgeWatcher) shares one nonce
+  // counter — see chain.ts ChainClient.ogWallet rationale.
+  private readonly fundingSigner: ethers.NonceManager | null
   private readonly provider: ethers.JsonRpcProvider
 
   constructor(private readonly store: SporeiseStore) {
@@ -301,7 +304,7 @@ export class SporeiseRegistrar {
 
 export class SporeiseTaskRunner {
   private readonly dagRegistry: ethers.Contract
-  private readonly fundingSigner: ethers.Wallet
+  private readonly fundingSigner: ethers.NonceManager
 
   constructor(
     private readonly store: SporeiseStore,

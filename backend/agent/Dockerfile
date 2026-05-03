@@ -35,6 +35,18 @@ RUN --mount=type=cache,id=swarm-pnpm-store,target=/pnpm-store,sharing=locked \
 RUN test -d node_modules && test -n "$(ls -A node_modules 2>/dev/null)" \
  || (echo "FATAL: pnpm install produced an empty node_modules" >&2 && exit 1)
 
+# Cache-bust handle for parity with backend/api/Dockerfile. The agent
+# image is tagged `swarm-agent:latest` (no version suffix), so Docker
+# may try to reuse cached layers even when source has changed. Bumping
+# CACHE_BUST in docker-compose.yml's agent.build.args invalidates this
+# RUN line + everything after, forcing a fresh COPY + compile. Without
+# this, a hot rebuild on Dokploy keeps shipping stale agent code while
+# the API picks up new code via its versioned tag — exactly the split-
+# brain failure mode that hid older MAX_RETRIES / planner-stake values
+# in spawned containers long after their fixes had been merged.
+ARG CACHE_BUST=dev
+RUN echo "agent cache-bust=${CACHE_BUST}"
+
 COPY . .
 
 RUN pnpm --filter @swarm/contracts exec hardhat compile

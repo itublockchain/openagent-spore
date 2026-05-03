@@ -11,13 +11,13 @@ services:
     # via the matching CACHE_BUST arg). Tag and CACHE_BUST MUST move
     # together — the Dockerfile's `RUN echo cache-bust=...` makes the
     # busting visible in the build log so you can verify it ran.
-    image: swarm-api:cb-2026-05-03-1
+    image: swarm-api:cb-2026-05-03-3
     pull_policy: build
     build:
       context: .
       dockerfile: backend/api/Dockerfile
       args:
-        CACHE_BUST: 2026-05-03-1
+        CACHE_BUST: 2026-05-03-3
     expose:
       - "3001"
     # Runtime env precedence (highest first):
@@ -54,6 +54,34 @@ services:
       swarm_default:
         aliases:
           - api
+
+  # Agent image builder. AgentRunner spawns per-deploy agent containers
+  # via Dockerode using `swarm-agent:latest` — this service exists ONLY
+  # to make Dokploy build + tag that image on every redeploy. Without
+  # it, the agent image would be stale on every host that wasn't
+  # manually rebuilt, while the API image got fresh code from compose.
+  # Symptom: API runs new code, spawned agents run old code (e.g.
+  # MAX_RETRIES=3 vs source's 5/8) — exactly what we hit on Dokploy.
+  #
+  # The `entrypoint: ["true"]` override turns this compose-managed
+  # instance into a one-shot that exits 0 immediately. We don't want
+  # ANY long-running compose-managed agent — spawned-agent containers
+  # are created by AgentRunner with per-deploy keys + AXL identity;
+  # a compose-baseline instance with the Dockerfile-baked default
+  # PRIVATE_KEY/AGENT_ID would either collide with a spawned one or
+  # show up as a phantom in the UI's pool view.
+  agent:
+    image: swarm-agent:latest
+    pull_policy: build
+    build:
+      context: .
+      dockerfile: backend/agent/Dockerfile
+      args:
+        CACHE_BUST: 2026-05-03-3
+    entrypoint: [ "true" ]
+    restart: "no"
+    networks:
+      swarm_default: {}
 
   axl-seed:
     build:

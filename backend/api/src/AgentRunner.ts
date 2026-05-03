@@ -162,6 +162,90 @@ export class AgentManager {
    * after their on-chain identity has been invalidated by a registry
    * redeploy or status change.
    */
+  /**
+   * Hard-reset path triggered by `RESET_AGENT_POOL=true` env. Three
+   * steps, in order:
+   *
+   *   1. Force-remove every container whose Image is AGENT_IMAGE on
+   *      the host. Filter is image-based (not name-based) so it
+   *      catches zombies whose container_name doesn't match the
+   *      `swarm-${agentId}` convention — e.g. a previous deploy that
+   *      used a different prefix, or hand-spawned debug containers.
+   *      Compose-managed services run different images so they're
+   *      untouched.
+   *   2. Mark every on-chain RUNNING agent owned by our operator
+   *      address as STOPPED via AgentRegistry.setStatus. Without
+   *      this, the public pool view would keep showing dead agents
+   *      until restore() ran on a fresh secret list and noticed them.
+   *   3. Drop every entry from the local AgentSecretStore. The
+   *      encrypted private keys are gone after this — funds locked
+   *      in agentBalances on those wallets need an operator-side
+   *      manual debitAgent to recover. Acceptable for testnet /
+   *      demo cleanup; a production reset would drain first.
+   *
+   * No-op when registry / fundingSigner aren't configured (logs only).
+   */
+  private async wipeAll(): Promise<void> {
+    console.warn('[AgentManager] WIPE: RESET_AGENT_POOL=true — nuking spawned agents, on-chain entries, and local secrets.')
+
+    // 1. Force-remove every agent-image container.
+    let removed = 0
+    try {
+      const all = await docker.listContainers({ all: true })
+      for (const c of all) {
+        if (c.Image !== AGENT_IMAGE) continue
+        const name = c.Names[0]?.replace(/^\//, '') ?? c.Id.slice(0, 12)
+        try {
+          await docker.getContainer(c.Id).remove({ force: true })
+          removed++
+          console.log(`[AgentManager] WIPE: removed container ${name}`)
+        } catch (err) {
+          console.warn(`[AgentManager] WIPE: failed to remove ${name}:`, (err as Error).message)
+        }
+      }
+    } catch (err) {
+      console.error('[AgentManager] WIPE: docker.listContainers failed:', err)
+    }
+    console.log(`[AgentManager] WIPE: removed ${removed} agent container(s).`)
+
+    // 2. Mark our on-chain RUNNING agents as STOPPED so the public pool
+    //    view (and other API nodes) reflects the wipe immediately.
+    if (this.registry && this.fundingSigner) {
+      try {
+        const ourAddr = (await this.fundingSigner.getAddress()).toLowerCase()
+        const [ids, agents] = await this.registry.listAgents(0, 0)
+        let marked = 0
+        for (let i = 0; i < ids.length; i++) {
+          const a = agents[i]
+          if (Number(a.status) !== STATUS_RUNNING) continue
+          if (a.owner.toLowerCase() !== ourAddr) continue
+          try {
+            await sendWithNonceRetry('wipe.setStatus(STOPPED)', () =>
+              this.registry!.setStatus(ids[i], STATUS_STOPPED).then((tx: any) => tx.wait()),
+            )
+            marked++
+          } catch (err) {
+            console.warn(`[AgentManager] WIPE: setStatus(STOPPED) failed for ${ids[i]}:`, (err as Error).message)
+          }
+        }
+        console.log(`[AgentManager] WIPE: marked ${marked} on-chain agent(s) STOPPED.`)
+      } catch (err) {
+        console.error('[AgentManager] WIPE: on-chain reconciliation failed:', err)
+      }
+    } else {
+      console.warn('[AgentManager] WIPE: registry/operator unavailable — skipping on-chain mark.')
+    }
+
+    // 3. Drop every secret entry. Encrypted PKs gone after this.
+    try {
+      const before = this.secrets.list()
+      for (const s of before) this.secrets.delete(s.agentId)
+      console.log(`[AgentManager] WIPE: cleared ${before.length} local secret entry/entries.`)
+    } catch (err) {
+      console.error('[AgentManager] WIPE: secret store wipe failed:', err)
+    }
+  }
+
   private async cleanupOrphanContainer(secret: AgentSecret): Promise<void> {
     const targets: string[] = []
     if (secret.containerId) targets.push(secret.containerId)
@@ -813,6 +897,20 @@ export class AgentManager {
    *      pool reflects reality.
    */
   async restore(): Promise<void> {
+    // One-shot reset path. Set RESET_AGENT_POOL=true in env (e.g.
+    // Dokploy's environment override) to nuke every spawned agent the
+    // host can see, mark all on-chain agents owned by us as STOPPED,
+    // and wipe the local secret store on the next API boot. After it
+    // runs, take RESET_AGENT_POOL back out (or set it to false) and
+    // redeploy — leaving it on would re-wipe on every restart and
+    // make agents un-deployable. We continue into normal restore()
+    // afterwards so a clean boot follows immediately; the secret list
+    // will be empty so the rest is a no-op.
+    if (process.env.RESET_AGENT_POOL === 'true') {
+      await this.wipeAll()
+      console.warn('[AgentManager] WIPE complete — set RESET_AGENT_POOL=false (or remove it) before next deploy.')
+    }
+
     if (!this.registry) {
       console.warn('[AgentManager] restore() skipped — registry disabled')
       return

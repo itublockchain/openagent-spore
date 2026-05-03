@@ -186,79 +186,79 @@ export function Header({ onDeployClick }: Props) {
   }, [])
 
   // Persist taskId in navigation links if present
-  const tasksHref = taskId ? `/explorer?taskId=${taskId}` : '/explorer'
-  const poolHref = taskId ? `/pool?taskId=${taskId}` : '/pool'
+  const tasksHref = '/explorer'
+  const poolHref = '/pool'
 
   return (
     <>
-    <header className="h-14 border-b border-border bg-background/95 backdrop-blur px-4 flex items-center justify-between shrink-0 z-50">
-      <div className="flex items-center gap-8">
-        <Link href="/" className="flex items-center gap-2 font-extrabold tracking-tighter text-lg">
-          <Image
-            src="/spore_icon.svg"
-            alt="SPORE"
-            width={22}
-            height={22}
-            className="w-5 h-5 dark:invert"
-            priority
-          />
-          SPORE
-        </Link>
-        <nav className="hidden md:flex items-center gap-6">
-          <Link href={tasksHref} className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors">
-            Tasks
+      <header className="h-14 border-b border-border bg-background/95 backdrop-blur px-4 flex items-center justify-between shrink-0 z-50">
+        <div className="flex items-center gap-8">
+          <Link href="/" className="flex items-center gap-2 font-extrabold tracking-tighter text-lg">
+            <Image
+              src="/spore_icon.svg"
+              alt="SPORE"
+              width={22}
+              height={22}
+              className="w-5 h-5 dark:invert"
+              priority
+            />
+            SPORE
           </Link>
-          <Link href={poolHref} className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors">
-            Agent Pool
-          </Link>
-          <Link href="/developer" className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors">
-            Developer
-          </Link>
-          <Link href="/profile" className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors">
-            Profile
-          </Link>
-        </nav>
-      </div>
+          <nav className="hidden md:flex items-center gap-6">
+            <Link href={tasksHref} className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors">
+              Tasks
+            </Link>
+            <Link href={poolHref} className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors">
+              Agent Pool
+            </Link>
+            <Link href="/developer" className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors">
+              Developer
+            </Link>
+            <Link href="/profile" className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors">
+              Profile
+            </Link>
+          </nav>
+        </div>
 
-      <div className="flex items-center gap-3">
-        <button
-          onClick={onDeployClick}
-          className="flex items-center gap-1.5 bg-primary text-primary-foreground text-xs font-semibold px-3 py-1.5 rounded-md hover:bg-primary/90 transition-colors shadow-sm"
-        >
-          <Rocket className="w-3.5 h-3.5" />
-          Deploy Agent
-        </button>
-
-        {isAuthenticated && address ? (
-          <WalletPill
-            address={address as `0x${string}`}
-            balance={balance}
-            onDeposit={() => setShowDeposit(true)}
-            onWithdraw={() => setShowWithdraw(true)}
-          />
-        ) : (
+        <div className="flex items-center gap-3">
           <button
-            onClick={() => setShowWallet(true)}
-            className="flex items-center gap-1.5 bg-secondary text-secondary-foreground text-xs font-semibold px-3 py-1.5 rounded-md hover:bg-secondary/80 transition-colors shadow-sm border border-border"
+            onClick={onDeployClick}
+            className="flex items-center gap-1.5 bg-primary text-primary-foreground text-xs font-semibold px-3 py-1.5 rounded-md hover:bg-primary/90 transition-colors shadow-sm"
           >
-            <Wallet className="w-3.5 h-3.5" />
-            Connect
+            <Rocket className="w-3.5 h-3.5" />
+            Deploy Agent
           </button>
-        )}
 
-        <ThemeToggle />
+          {isAuthenticated && address ? (
+            <WalletPill
+              address={address as `0x${string}`}
+              balance={balance}
+              onDeposit={() => setShowDeposit(true)}
+              onWithdraw={() => setShowWithdraw(true)}
+            />
+          ) : (
+            <button
+              onClick={() => setShowWallet(true)}
+              className="flex items-center gap-1.5 bg-secondary text-secondary-foreground text-xs font-semibold px-3 py-1.5 rounded-md hover:bg-secondary/80 transition-colors shadow-sm border border-border"
+            >
+              <Wallet className="w-3.5 h-3.5" />
+              Connect
+            </button>
+          )}
 
-        {isAuthenticated && address && (
-          <button
-            onClick={signOut}
-            className="p-1.5 hover:bg-muted rounded-md transition-colors text-muted-foreground hover:text-foreground"
-            title="Disconnect"
-          >
-            <LogOut className="w-4 h-4" />
-          </button>
-        )}
-      </div>
-    </header>
+          <ThemeToggle />
+
+          {isAuthenticated && address && (
+            <button
+              onClick={signOut}
+              className="p-1.5 hover:bg-muted rounded-md transition-colors text-muted-foreground hover:text-foreground"
+              title="Disconnect"
+            >
+              <LogOut className="w-4 h-4" />
+            </button>
+          )}
+        </div>
+      </header>
 
       {/* Modals are portalled to document.body so that the header's
           backdrop-blur (CSS filter) doesn't create a new containing

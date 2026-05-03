@@ -30,7 +30,7 @@ COPY frontend/package.json ./frontend/
 
 # BuildKit cache mount → pnpm store survives across builds.
 # --shamefully-hoist flattens deps so legacy CommonJS tools resolve.
-RUN --mount=type=cache,id=swarm-pnpm-store,target=/pnpm-store,sharing=locked \
+RUN --mount=type=cache,id=swarm-pnpm-store-v2,target=/pnpm-store,sharing=locked \
     pnpm install --no-frozen-lockfile --shamefully-hoist
 RUN test -d node_modules && test -n "$(ls -A node_modules 2>/dev/null)" \
  || (echo "FATAL: pnpm install produced an empty node_modules" >&2 && exit 1)

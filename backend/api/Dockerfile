@@ -40,7 +40,7 @@ COPY frontend/package.json ./frontend/
 # --no-frozen-lockfile lets a still-valid lockfile work while tolerating
 # drift from a recent dep change that wasn't committed; switch to
 # --frozen-lockfile in CI for strict determinism.
-RUN --mount=type=cache,id=swarm-pnpm-store,target=/pnpm-store,sharing=locked \
+RUN --mount=type=cache,id=swarm-pnpm-store-v2,target=/pnpm-store,sharing=locked \
     pnpm install --no-frozen-lockfile --shamefully-hoist
 # Hard sanity check — pnpm install must have populated node_modules.
 # A silent no-op (corepack failure, lockfile corruption) used to slip

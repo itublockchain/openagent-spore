@@ -103,7 +103,7 @@ COPY shared/package.json ./shared/
 COPY backend/shared-infra/package.json ./backend/shared-infra/
 COPY contracts/package.json ./contracts/
 
-RUN --mount=type=cache,id=swarm-pnpm-store,target=/pnpm-store,sharing=locked \
+RUN --mount=type=cache,id=swarm-pnpm-store-v2,target=/pnpm-store,sharing=locked \
     pnpm install --no-frozen-lockfile --shamefully-hoist
 
 COPY . .

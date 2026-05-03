@@ -117,12 +117,17 @@ ENV OG_RPC_URL=https://evmrpc-testnet.0g.ai \
     BASE_GATEWAY_ADDRESS=0x409e4d7af7fc0641c8f070c79d13ecb94d91e443 \
     BRIDGE_STATE_DIR=/data
 
-# New tokenless 0G contract addresses (override static-imported og_testnet.json).
-ENV L2_TREASURY_ADDRESS=0x36b79557d2E364C84989b92EBcD74FD06ed6Bbbc \
-    L2_ESCROW_ADDRESS=0x7384557b02Cc2D3dAbCa4458aaED28276Ba5345A \
-    L2_DAG_REGISTRY_ADDRESS=0xb187cf541B337ac08D588C47C3073D5220fAC7BD \
-    L2_SLASHING_VAULT_ADDRESS=0xd950E64a5e6c214957DdDD1eb0C267BA7423d5AD \
-    L2_AGENT_REGISTRY_ADDRESS=0x3A90Ee31AB3D13682480F35F29b950dBa21aDe3e
+# L2 contract addresses are loaded at runtime from
+# contracts/deployments/og_testnet.json (baked into the image via the
+# COPY . . above) with `.env` / compose env_file overrides on top. We
+# DO NOT bake addresses here — every redeploy of the contracts updates
+# og_testnet.json, but stale image layers used to leave a long-dead
+# DAGRegistry pinned in this ENV, which then propagated to spawned
+# agent containers via AgentRunner. Symptom: registerDAG succeeded on
+# the old registry, then markValidatedBatch reverted "Unauthorized"
+# because the planner state lived on a different registry instance.
+# Source-of-truth chain is now: og_testnet.json (build-time) → .env
+# (runtime override) → none-of-the-above falls through to the JSON.
 
 # 0G Compute relay
 ENV ZG_COMPUTE_RPC_URL=https://evmrpc-testnet.0g.ai \

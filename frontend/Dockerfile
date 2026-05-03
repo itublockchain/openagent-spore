@@ -30,14 +30,15 @@ ARG NEXT_PUBLIC_BASE_SEPOLIA_RPC_URL=""
 ARG NEXT_PUBLIC_ETH_SEPOLIA_RPC_URL=""
 ARG NEXT_PUBLIC_ARB_SEPOLIA_RPC_URL=""
 
-# Cache-bust handle. Bump CACHE_BUST in docker-compose.yml's frontend
-# args block (and the matching image tag) to force a full rebuild of
-# the COPY+next-build layers. Without this, a redeploy that only
+# Cache-bust handle (global ARG only — RUN goes inside the builder
+# stage below, since RUN before any FROM is invalid in multi-stage
+# Dockerfiles). Bump CACHE_BUST in docker-compose.yml's frontend
+# args block (and the matching image tag) to force a full rebuild
+# of the COPY+next-build layers. Without this, a redeploy that only
 # changes NEXT_PUBLIC_* env values reuses cached layers and ships an
 # old bundle — exactly the failure mode that left publicnode.com
 # baked into the wagmi transport even after Alchemy URLs were set.
 ARG CACHE_BUST=dev
-RUN echo "frontend cache-bust=${CACHE_BUST}"
 
 # ─── 2. Validation Stage ───
 FROM node:22-alpine AS validate

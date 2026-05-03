@@ -143,6 +143,46 @@ export class AgentManager {
   }
 
   /**
+   * Wraps any operator-signed sendTransaction call with retry-on-stale-
+   * nonce. NonceManager keeps a local counter relative to the chain
+   * `pending` value it cached at first send. Any tx signed with the
+   * same operator key OUTSIDE this NonceManager (a different process,
+   * an agent container that reuses PRIVATE_KEY, an out-of-band manual
+   * tx) silently advances the chain and our cache goes stale —
+   * subsequent sends miss the actual `pending` and fail with
+   * NONCE_EXPIRED ("nonce too low") or REPLACEMENT_UNDERPRICED. Calling
+   * `reset()` drops the cache so the next send re-fetches `pending`
+   * and aligns with reality.
+   *
+   * Three attempts is generous: the first retry handles the typical
+   * one-step drift; the second covers a burst of external txs racing
+   * with us. Exponential backoff (250ms, 500ms) gives mempool a moment
+   * to settle between tries.
+   *
+   * Use this for ANY tx submitted via the operator NonceManager. The
+   * factory in v1/chain.ts shares one NonceManager across all callers
+   * so `reset()` here is also seen by SporeiseRunner / BridgeWatcher.
+   */
+  private async sendOperatorTx<T>(label: string, fn: () => Promise<T>): Promise<T> {
+    const MAX_ATTEMPTS = 3
+    let lastErr: unknown = null
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      try {
+        return await fn()
+      } catch (err) {
+        lastErr = err
+        const code = (err as any)?.code
+        const isStaleNonce = code === 'NONCE_EXPIRED' || code === 'REPLACEMENT_UNDERPRICED'
+        if (!isStaleNonce || attempt === MAX_ATTEMPTS) break
+        console.warn(`[AgentManager] ${label} attempt ${attempt} hit ${code}; resetting NonceManager and retrying`)
+        try { this.fundingSigner?.reset() } catch { /* no-op */ }
+        await new Promise(r => setTimeout(r, 250 * attempt))
+      }
+    }
+    throw lastErr
+  }
+
+  /**
    * Force-remove the container associated with a secret, by both id and
    * canonical name. Idempotent — used by restore() when an agent is found
    * to be orphaned (missing on-chain entry, or marked STOPPED/ERROR). The
@@ -308,10 +348,12 @@ export class AgentManager {
     //    stake/submitOutput txs. The operator covers this — it's not the
     //    user's money.
     try {
-      const tx = await this.fundingSigner.sendTransaction({
-        to: wallet.address,
-        value: ethers.parseEther(GAS_PREFUND_OG),
-      })
+      const tx = await this.sendOperatorTx('prefund', () =>
+        this.fundingSigner!.sendTransaction({
+          to: wallet.address,
+          value: ethers.parseEther(GAS_PREFUND_OG),
+        }),
+      )
       console.log(`[AgentManager] Prefund TX sent: ${tx.hash} → ${wallet.address} (${GAS_PREFUND_OG} OG)`)
       await tx.wait()
     } catch (err) {
@@ -324,18 +366,24 @@ export class AgentManager {
     //    is stranded in agentBalances. Recovery: the operator can call
     //    Escrow.debitAgent + Treasury.creditBalance to refund manually.
     try {
-      const debitTx = await this.treasury.debitBalance(input.ownerAddress, stakeWei)
+      const debitTx = await this.sendOperatorTx('treasury.debitBalance', () =>
+        this.treasury!.debitBalance(input.ownerAddress, stakeWei),
+      )
       await debitTx.wait()
     } catch (err) {
       throw new Error(`[AgentManager] Treasury.debitBalance failed: ${(err as Error).message}`)
     }
     try {
-      const creditTx = await this.escrow.creditAgent(wallet.address, stakeWei)
+      const creditTx = await this.sendOperatorTx('escrow.creditAgent', () =>
+        this.escrow!.creditAgent(wallet.address, stakeWei),
+      )
       await creditTx.wait()
     } catch (err) {
       // Refund the user — debit landed, credit didn't.
       try {
-        const refundTx = await this.treasury.creditBalance(input.ownerAddress, stakeWei)
+        const refundTx = await this.sendOperatorTx('treasury.creditBalance(refund)', () =>
+          this.treasury!.creditBalance(input.ownerAddress, stakeWei),
+        )
         await refundTx.wait()
       } catch (refundErr) {
         console.error(

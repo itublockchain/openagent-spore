@@ -4,6 +4,12 @@ services:
     build:
       context: .
       dockerfile: backend/api/Dockerfile
+      # Bump this value to force Dokploy (and any cached `docker compose
+      # build`) to re-run the source COPY + tsc layers in the builder
+      # stage. Without it, Docker reuses the prior image and a new
+      # commit's TS changes never reach the runner. Format: YYYY-MM-DD-N.
+      args:
+        CACHE_BUST: 2026-05-03-1
     expose:
       - "3001"
     # Runtime env precedence (highest first):

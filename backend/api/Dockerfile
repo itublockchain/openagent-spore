@@ -48,6 +48,14 @@ RUN --mount=type=cache,id=swarm-pnpm-store,target=/pnpm-store,sharing=locked \
 RUN test -d node_modules && test -n "$(ls -A node_modules 2>/dev/null)" \
  || (echo "FATAL: pnpm install produced an empty node_modules" >&2 && exit 1)
 
+# Cache-bust handle. Bump the CACHE_BUST value in docker-compose.yml
+# (or pass --build-arg CACHE_BUST=...) to force the COPY/compile layers
+# below to rebuild on the next `docker compose build`. Dokploy reuses
+# build cache aggressively across redeploys; without a busted arg, a
+# new commit's TS changes never reach the runner image.
+ARG CACHE_BUST=dev
+RUN echo "cache-bust=${CACHE_BUST}"
+
 COPY . .
 
 RUN pnpm --filter @swarm/contracts exec hardhat compile

@@ -18,6 +18,18 @@ ARG NEXT_PUBLIC_TREASURY_ADDRESS=""
 ARG NEXT_PUBLIC_GATEWAY_ADDRESS=""
 ARG NEXT_PUBLIC_CCTP_RECEIVER_ADDRESS=""
 
+# Per-chain RPC overrides (Base / ETH / Arb Sepolia). Optional — wagmi
+# falls back to publicnode.com when these are empty, but that endpoint
+# rate-limits aggressively under user load and surfaces as a confusing
+# "contract function reverted: Request is being rate limited" error in
+# the deposit flow. Setting these to a paid Alchemy/Infura endpoint
+# eliminates the false-revert symptom. Compose passes the values from
+# .env / Dokploy env at build time; without these ARG declarations the
+# values were silently dropped before this fix.
+ARG NEXT_PUBLIC_BASE_SEPOLIA_RPC_URL=""
+ARG NEXT_PUBLIC_ETH_SEPOLIA_RPC_URL=""
+ARG NEXT_PUBLIC_ARB_SEPOLIA_RPC_URL=""
+
 # ─── 2. Validation Stage ───
 FROM node:22-alpine AS validate
 ARG NEXT_PUBLIC_REOWN_PROJECT_ID
@@ -53,6 +65,9 @@ ARG NEXT_PUBLIC_ESCROW_ADDRESS
 ARG NEXT_PUBLIC_TREASURY_ADDRESS
 ARG NEXT_PUBLIC_GATEWAY_ADDRESS
 ARG NEXT_PUBLIC_CCTP_RECEIVER_ADDRESS
+ARG NEXT_PUBLIC_BASE_SEPOLIA_RPC_URL
+ARG NEXT_PUBLIC_ETH_SEPOLIA_RPC_URL
+ARG NEXT_PUBLIC_ARB_SEPOLIA_RPC_URL
 
 # Next.js bakes these into the JS bundle at BUILD TIME
 ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL \
@@ -63,7 +78,10 @@ ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL \
     NEXT_PUBLIC_ESCROW_ADDRESS=$NEXT_PUBLIC_ESCROW_ADDRESS \
     NEXT_PUBLIC_TREASURY_ADDRESS=$NEXT_PUBLIC_TREASURY_ADDRESS \
     NEXT_PUBLIC_GATEWAY_ADDRESS=$NEXT_PUBLIC_GATEWAY_ADDRESS \
-    NEXT_PUBLIC_CCTP_RECEIVER_ADDRESS=$NEXT_PUBLIC_CCTP_RECEIVER_ADDRESS
+    NEXT_PUBLIC_CCTP_RECEIVER_ADDRESS=$NEXT_PUBLIC_CCTP_RECEIVER_ADDRESS \
+    NEXT_PUBLIC_BASE_SEPOLIA_RPC_URL=$NEXT_PUBLIC_BASE_SEPOLIA_RPC_URL \
+    NEXT_PUBLIC_ETH_SEPOLIA_RPC_URL=$NEXT_PUBLIC_ETH_SEPOLIA_RPC_URL \
+    NEXT_PUBLIC_ARB_SEPOLIA_RPC_URL=$NEXT_PUBLIC_ARB_SEPOLIA_RPC_URL
 
 COPY pnpm-lock.yaml pnpm-workspace.yaml package.json turbo.json ./
 COPY frontend/package.json ./frontend/

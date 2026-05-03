@@ -349,13 +349,14 @@ export class SwarmAgent {
 
       // Ensure we have enough balance to stake as a planner before racing.
       // If we don't, we can still participate as a worker later.
-      // The capacity check is against the ACTUAL configured stakeAmount —
-      // the previous '100' default was a lie when the agent was deployed
-      // with a smaller bond (and let the agent race a stake it couldn't
-      // cover, blowing up later inside runAsPlanner).
+      // Planner stake is 10% of stakeAmount (same scale as worker per-
+      // subtask stake — see plannerStakeAmount() / executeSubtask). The
+      // earlier version checked against the FULL stakeAmount and locked
+      // 100% of the bond on stake(), which meant a single in-flight task
+      // bricked the agent for any future planning until settle finalized.
       if (typeof this.deps.chain.getStakeCapacity === 'function') {
         try {
-          const capacity = await this.deps.chain.getStakeCapacity(this.deps.config.stakeAmount)
+          const capacity = await this.deps.chain.getStakeCapacity(this.plannerStakeAmount())
           if (capacity < 1) {
             console.log(`[Agent ${this.deps.config.agentId}] insufficient balance to be planner, abstaining`)
             return
@@ -429,17 +430,18 @@ export class SwarmAgent {
       // Defensive re-check between registerDAG and stake. The earlier
       // pre-race check at onTaskSubmitted can race with another task
       // consuming the same Escrow ledger balance — by the time we get
-      // here our agentBalances may have dropped below stakeAmount and
-      // stake() would revert with "insufficient balance", silently
+      // here our agentBalances may have dropped below the planner stake
+      // and stake() would revert with "insufficient balance", silently
       // killing settlement (no DAG_READY ever fires). Skip-and-fail
       // here lets us emit TASK_FAILED so the UI surfaces the real
       // reason instead of spinning forever.
+      const plannerStake = this.plannerStakeAmount()
       if (typeof this.deps.chain.getStakeCapacity === 'function') {
         try {
-          const capacity = await this.deps.chain.getStakeCapacity(this.deps.config.stakeAmount)
+          const capacity = await this.deps.chain.getStakeCapacity(plannerStake)
           if (capacity < 1) {
             throw new Error(
-              `Planner stake unaffordable: agent Escrow balance < stakeAmount=${this.deps.config.stakeAmount} USDC. Bond more USDC for ${agentId} (Escrow.deposit) and retry.`,
+              `Planner stake unaffordable: agent Escrow balance < ${plannerStake} USDC. Old planner stakes may be locked on a prior task that never settled — wait for the keeper watchdog (~110s) or top up ${agentId}.`,
             )
           }
         } catch (capErr) {
@@ -450,7 +452,16 @@ export class SwarmAgent {
         }
       }
 
-      await this.deps.chain.stake(taskId, this.deps.config.stakeAmount)
+      await this.deps.chain.stake(taskId, plannerStake)
+      // Self-arm the keeper watchdog the moment our planner stake lands.
+      // Without this, only NON-planner peers schedule it (via
+      // DAG_VALIDATING in registerEventHandlers). If our own keeper duties
+      // — markValidatedBatch / settleTask in validateLastNodeAsPlanner —
+      // revert OR if any later step here throws before DAG_VALIDATING
+      // ever emits, no peer rescues our locked planner stake until
+      // someone manually fires forceComplete. Idempotent on taskId, so
+      // duplicate arms (e.g. catch-block re-arm below) are no-ops.
+      this.scheduleKeeperWatchdog(taskId)
 
       // Mark planner responsibility BEFORE emitting DAG_READY. AxlNetwork.emit
       // schedules local handlers on the microtask queue; if onDAGReady runs
@@ -494,6 +505,14 @@ export class SwarmAgent {
       // an actionable error instead of an indefinite spinner.
       const taskId = event?.payload?.taskId
       if (taskId) {
+        // Defensive watchdog arm: if stake() landed before this throw
+        // (e.g. registerDAG succeeded but a later step blew up before we
+        // could emit DAG_READY), our planner stake is locked and no
+        // peer's DAG_VALIDATING handler will ever rescue it. Schedule
+        // forceComplete now so KEEPER_TIMEOUT recovery kicks in. Safe
+        // when stake never landed — the on-chain notFinalized + no-stake
+        // checks make forceComplete a no-op revert that we swallow.
+        try { this.scheduleKeeperWatchdog(taskId) } catch {}
         const reason = (err as any)?.shortMessage ?? (err as any)?.message ?? String(err)
         this.deps.network.emit(this.buildEvent(EventType.TASK_FAILED, {
           taskId,
@@ -1490,6 +1509,24 @@ export class SwarmAgent {
 
   private buildEvent<T>(type: EventType, payload: T): AXLEvent<T> {
     return { type, payload, timestamp: Date.now(), agentId: this.deps.config.agentId }
+  }
+
+  /**
+   * Planner stake size, in USDC decimal-string form. Set to 10% of the
+   * agent's configured stakeAmount — same scale as the per-subtask
+   * worker stake — so a stuck planner stake on one task doesn't lock
+   * the agent's full bond. The 100%-stake legacy behavior caused a
+   * cascade where any settlement failure (markValidatedBatch revert,
+   * settleTask revert, RPC drop mid-flight) left the agent unable to
+   * be planner on ANY future task until manual operator forceComplete.
+   * The keeper watchdog auto-recovers locked stakes after KEEPER_TIMEOUT
+   * (~110s with grace), so the only durable cost of using a smaller
+   * planner stake is a slightly smaller slashable collateral against
+   * malicious planning — acceptable trade-off vs. agent bricking.
+   */
+  private plannerStakeAmount(): string {
+    const totalStake = parseFloat(this.deps.config.stakeAmount || '100')
+    return (totalStake * 0.1).toString()
   }
 
   /**
